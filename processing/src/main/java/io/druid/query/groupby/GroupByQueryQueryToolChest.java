@@ -31,6 +31,7 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.inject.Inject;
 import com.metamx.common.ISE;
+import com.metamx.common.guava.MappedSequence;
 import com.metamx.common.guava.Sequence;
 import com.metamx.emitter.service.ServiceMetricEvent;
 import io.druid.collections.StupidPool;
@@ -51,6 +52,7 @@ import io.druid.query.QueryToolChest;
 import io.druid.query.SubqueryQueryRunner;
 import io.druid.query.aggregation.AggregatorFactory;
 import io.druid.query.aggregation.MetricManipulationFn;
+import io.druid.query.aggregation.MetricManipulatorFns;
 import io.druid.query.dimension.DefaultDimensionSpec;
 import io.druid.query.dimension.DimensionSpec;
 import io.druid.query.extraction.ExtractionFn;
@@ -138,7 +140,7 @@ public class GroupByQueryQueryToolChest extends QueryToolChest<Row, GroupByQuery
     if (dataSource instanceof QueryDataSource) {
       GroupByQuery subquery;
       try {
-        subquery = (GroupByQuery) ((QueryDataSource) dataSource).getQuery().withOverriddenContext(query.getContext());
+        subquery = (GroupByQuery) ((QueryDataSource) dataSource).getQuery();
       }
       catch (ClassCastException e) {
         throw new UnsupportedOperationException("Subqueries must be of type 'group by'");
@@ -156,7 +158,20 @@ public class GroupByQueryQueryToolChest extends QueryToolChest<Row, GroupByQuery
           runner,
           context
       );
-      return strategySelector.strategize(query).processSubqueryResult(subquery, query, subqueryResult);
+
+      final Sequence<Row> finalizingResults;
+      if (GroupByQuery.getContextFinalize(subquery, false)) {
+        finalizingResults = new MappedSequence<>(subqueryResult,
+                                                 makePreComputeManipulatorFn(
+                                                     subquery,
+                                                     MetricManipulatorFns.finalizing()
+                                                 )
+        );
+      } else {
+        finalizingResults = subqueryResult;
+      }
+
+      return strategySelector.strategize(query).processSubqueryResult(subquery, query, finalizingResults);
     } else {
       return strategySelector.strategize(query).mergeResults(runner, query, context);
     }
